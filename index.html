@@ -230,6 +230,13 @@ body.numcol .hand[data-v="1"] .hbadge{background:#2e7d32}body.numcol .hand[data-
 @media (pointer:coarse){.hand.can:hover{transform:none;background:transparent}}
 @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 .sidefoot .btn,.side .btn{white-space:nowrap;word-break:keep-all}
+/* 상대 쪽(위쪽) 손: 손 그림과 함께 숫자도 그 손의 주인을 향해 돌린다 */
+.hand[data-down="1"] .hbadge{bottom:auto;top:6%;transform:translateX(-50%) rotate(180deg)}
+.hand[data-down="1"] .paper{transform:translate(-50%,-50%) rotate(173deg)}
+.hand[data-down="1"] .bignum{transform:rotate(180deg)}
+.hand[data-down="1"] .hlab{top:auto;bottom:2px;left:auto;right:6px;transform:rotate(180deg)}
+.apan .why{margin:.4rem 0 .5rem;padding-left:1.1rem;font-size:.86rem;line-height:1.5;color:var(--tx)}.apan .why li{margin:.15rem 0}
+.dist .chip.taboo{opacity:.35;text-decoration:line-through;cursor:not-allowed}
 
 </style>
 </head>
@@ -266,7 +273,7 @@ E.sum = sum;
 
 /* ---------------- 규칙 ---------------- */
 E.defaultRules = function () {
-  return { death: 5, hands: 2, frac: false, rep: 5, drawWin: true, drawBalance: false };
+  return { death: 5, hands: 2, frac: false, rep: 5, drawWin: true, drawBalance: false, repBan: false };
 };
 E.normRules = function (r) {
   var d = E.defaultRules(), o = {}, k;
@@ -278,13 +285,20 @@ E.normRules = function (r) {
   o.rep = (+o.rep === 3 || +o.rep === 0) ? +o.rep : 5;
   o.drawWin = !!o.drawWin;
   o.drawBalance = !!o.drawBalance;
+  o.repBan = !!o.repBan && o.rep > 0;
   o.S = o.frac ? 2 : 1;
   o.deathU = o.death * o.S;
   o.M = o.deathU - 1;
   return o;
 };
 E.ruleCore = function (R) {
-  return { death: R.death, hands: R.hands, frac: !!R.frac, rep: R.rep, drawWin: !!R.drawWin, drawBalance: !!R.drawBalance };
+  return { death: R.death, hands: R.hands, frac: !!R.frac, rep: R.rep, drawWin: !!R.drawWin, drawBalance: !!R.drawBalance, repBan: !!R.repBan };
+};
+/* 무승부=승리 규칙으로 동형 무승부가 곧 승리일 때 그 승자 쪽 (-1: 해당 없음). 동형 금기가 켜져 있으면 동형으로 끝나지 않으므로 적용하지 않음 */
+E.drawCtx = { ben: -1 };
+E.drawEvalSide = function (R, startP) {
+  if (!R.drawWin || !(R.rep > 0) || R.repBan) return -1;
+  return E.drawBeneficiary(R, startP || E.startPos(R));
 };
 E.isStandard = function (R) { return R.death === 5 && R.hands === 2 && !R.frac; };
 E.solverKey = function (R) { return R.death + '/' + R.hands + '/' + (R.frac ? 1 : 0); };
@@ -442,7 +456,7 @@ E.parseMoveToken = function (tok, P, R) {
 /* ---------------- FEN ---------------- */
 E.toFEN = function (P, R) {
   return E.fmtHands(P.h[0], R.S) + '/' + E.fmtHands(P.h[1], R.S) + ' ' + (P.t ? 'b' : 'w') + ' ' + R.death + ' ' + R.hands + ' ' + (R.frac ? 1 : 0) +
-    ' ' + R.rep + ' ' + (R.drawWin ? (R.drawBalance ? 2 : 1) : 0);
+    ' ' + R.rep + ' ' + (R.drawWin ? (R.drawBalance ? 2 : 1) : 0) + (R.repBan ? ' 1' : '');
 };
 E.parseFEN = function (str) {
   str = String(str || '').trim();
@@ -456,7 +470,9 @@ E.parseFEN = function (str) {
   var rep = 5, dw = 1;
   if (tk[5] !== undefined) { if (!/^(0|3|5)$/.test(tk[5])) return { err: '동형 반복(6번째 항목)은 0, 3, 5 중 하나여야 합니다.' }; rep = +tk[5]; }
   if (tk[6] !== undefined) { if (!/^[012]$/.test(tk[6])) return { err: '무승부 규칙(7번째 항목)은 0, 1, 2 중 하나여야 합니다.' }; dw = +tk[6]; }
-  var R = E.normRules({ death: death, hands: hands, frac: tk[4] === '1', rep: rep, drawWin: dw > 0, drawBalance: dw === 2 });
+  var rb = false;
+  if (tk[7] !== undefined) { if (!/^[01]$/.test(tk[7])) return { err: '동형 금기(8번째 항목)는 0 또는 1 이어야 합니다.' }; rb = tk[7] === '1'; }
+  var R = E.normRules({ death: death, hands: hands, frac: tk[4] === '1', rep: rep, drawWin: dw > 0, drawBalance: dw === 2, repBan: rb });
   if (tk[1] !== 'w' && tk[1] !== 'b') return { err: "차례(2번째 항목)는 'w' 또는 'b' 여야 합니다." };
   var grp = tk[0].split('/');
   if (grp.length !== 2) return { err: "손 배열은 '백손들/흑손들' 형식이어야 합니다. 예: 1,1/1,1" };
@@ -734,7 +750,9 @@ E.analyzePos = function (P, R, opts) {
   opts = opts || {};
   var t0 = Date.now(), st = E.status(P);
   if (st.over) return { exact: true, over: true, value: { cls: 'L', dtm: 0, score: -WIN }, moves: [], bestScore: -WIN, depth: 0, nodes: 0, ms: 0 };
-  var kids = E.childList(P, R), solver = opts.forceHeuristic ? null : E.getSolver(R), nodes = 0, depth = 0, i;
+  var kids = E.childList(P, R);
+  if (opts.ban) kids = kids.filter(function (k) { return !opts.ban[k.key]; });
+  var solver = opts.forceHeuristic ? null : E.getSolver(R), nodes = 0, depth = 0, i;
   var out = { exact: false, moves: [], depth: 0, nodes: 0 };
   if (solver && solver.ok) {
     out.exact = true;
@@ -782,10 +800,10 @@ E.analyzePos = function (P, R, opts) {
 
 /* ---------------- 수 평가 ---------------- */
 var TOL = 2;
-function winPct(m) {
+function winPct(m, who) {
   if (m.cls === 'W') return 92 + 8 / (1 + m.dtm / 10);
   if (m.cls === 'L') return 8 * m.dtm / (m.dtm + 10);
-  if (m.cls === 'D') return 50;
+  if (m.cls === 'D') return (E.drawCtx.ben < 0 || who === undefined) ? 50 : (who === E.drawCtx.ben ? 72 : 28);
   return Math.max(8, Math.min(92, 50 + 50 * Math.tanh(m.cp / 260)));
 }
 E.winPct = winPct;
@@ -806,6 +824,7 @@ function looksLikeSacrifice(P, R, mv, P2) {
 /* info: analyzePos 결과. played: 실제 수(ordered). ctx: {inBook} */
 E.gradeMove = function (P, R, info, mv, ctx) {
   ctx = ctx || {};
+  if (ctx.ben !== undefined) E.drawCtx.ben = ctx.ben;
   var P2 = E.applyMove(P, R, mv), key = E.key(P2), pm = null, i;
   for (i = 0; i < info.moves.length; i++) if (info.moves[i].key === key) { pm = info.moves[i]; break; }
   if (!pm) return { grade: null, text: '평가할 수 없는 수입니다.' };
@@ -816,7 +835,7 @@ E.gradeMove = function (P, R, info, mv, ctx) {
   var second = null;
   for (i = 0; i < info.moves.length; i++) if (info.moves[i].score < bestScore - TOL) { second = info.moves[i].score; break; }
   var res = { played: pm, bestMove: best, accLoss: 0 };
-  var wb = winPct(best), wp = winPct(pm);
+  var wb = winPct(best, P.t), wp = winPct(pm, P.t);
   res.wpBefore = wb; res.wpAfter = wp;
   res.acc = Math.max(0, Math.min(100, 103.17 * Math.exp(-0.04354 * Math.max(0, wb - wp)) - 3.17));
   var exact = info.exact;
@@ -830,7 +849,7 @@ E.gradeMove = function (P, R, info, mv, ctx) {
         var sac = looksLikeSacrifice(P, R, mv, P2);
         var naiveBest = -Infinity, nv = naiveScore(P2, R, P.t);
         for (i = 0; i < info.moves.length; i++) { var q = naiveScore(E.childPos(P, R, info.moves[i].mv), R, P.t); if (q > naiveBest) naiveBest = q; }
-        if (bestCls === 'W' && sac && nv < naiveBest && (pm.dtm || 0) >= 3) res.grade = 'brilliant';
+        if (bestCls === 'W' && sac && (pm.dtm || 0) >= 3) { res.grade = 'brilliant'; res.sacrifice = sac; res.naiveBetter = nv < naiveBest; }
         else res.grade = 'only';
       } else res.grade = 'best';
     } else if (sameClass) {
@@ -861,14 +880,68 @@ E.gradeMove = function (P, R, info, mv, ctx) {
     else res.grade = 'blunder';
   }
   res.text = E.explainGrade(res, info, P, R, mv);
+  try { res.why = E.explainWhy(res, info, P, R, mv); } catch (e) { res.why = []; }
   return res;
 };
 E.childPos = function (P, R, mv) { return E.applyMove(P, R, mv); };
+/* 왜 이 평가인지 — 구체적인 이유 목록 (분석 탭 표시용) */
+function aliveN(P, side) { var c = 0; for (var i = 0; i < P.h[side].length; i++) if (P.h[side][i] > 0) c++; return c; }
+E.explainWhy = function (res, info, P, R, mv) {
+  var me = P.t, op = 1 - me, nm = me === 0 ? '백' : '흑', on = op === 0 ? '백' : '흑', out = [], i;
+  var g = res.grade, pm = res.played, bm = res.bestMove;
+  if (!g || !pm) return out;
+  var P2 = E.applyMove(P, R, mv), st2 = E.status(P2);
+  var myAfter = aliveN(P2, me), opAfter = aliveN(P2, op), myBefore = aliveN(P, me), opBefore = aliveN(P, op);
+  var killAll = null, killOne = null;
+  if (!st2.over) {
+    var lm = E.legalMoves(P2, R), reps = lm.attacks.concat(lm.dists);
+    for (i = 0; i < reps.length; i++) {
+      var P3 = E.applyMove(P2, R, reps[i]), s3 = E.status(P3);
+      if (s3.over && s3.winner === op) { killAll = reps[i]; break; }
+      if (!killOne && aliveN(P3, me) < myAfter) killOne = reps[i];
+    }
+  }
+  var nW = 0, nD = 0, nL = 0, nU = 0;
+  for (i = 0; i < info.moves.length; i++) { var c = info.moves[i].cls; if (c === 'W') nW++; else if (c === 'D') nD++; else if (c === 'L') nL++; else nU++; }
+  var others = info.moves.length - 1;
+  var bestTxt = bm ? E.moveToStr(P, R, bm.mv) : '';
+  var bestKills = 0;
+  if (bm) { var Pb = E.applyMove(P, R, bm.mv); bestKills = opBefore - aliveN(Pb, op); }
+  var heur = info.exact ? '' : ' (휴리스틱 탐색 기준이라 확정은 아닙니다)';
+
+  if (g === 'brilliant') {
+    out.push('이 수는 상대에게 반격 기회를 주는 것처럼 보입니다' + (myAfter < myBefore ? ' — 내 손이 소멸합니다.' : ' — 두고 나면 상대가 내 손을 소멸시킬 수 있는 자리에 손이 놓입니다.'));
+    if (killOne) out.push('실제로 상대는 ' + E.moveToStr(P2, R, killOne) + '(' + E.moveText(P2, R, killOne) + ')로 내 손 하나를 없앨 수 있습니다.');
+    out.push('그럼에도 상대의 어떤 응수에도 승리가 유지됩니다 — ' + valTxt(pm) + '.');
+    if (others > 0) out.push('나머지 ' + others + '개 수는 모두 승리를 놓칩니다' + (nD || nL ? ' (무승부 ' + nD + ' · 패배 ' + nL + ')' : '') + '. 이 수만이 이기는 길이라 "탁월한 수"입니다.');
+    return out;
+  }
+  if (g === 'only') {
+    if (others > 0) out.push('가능한 수 ' + info.moves.length + '개 중 이 수만 ' + (pm.cls === 'W' ? '승리' : '무승부') + '를 유지합니다' + (nD || nL ? ' (나머지: 무승부 ' + (pm.cls === 'W' ? nD : 0) + ' · 패배 ' + nL + ')' : '') + '.');
+    out.push('결과: ' + valTxt(pm) + '.');
+    return out;
+  }
+  if (g === 'inaccuracy' || g === 'mistake' || g === 'blunder' || g === 'miss') {
+    if (st2.over && st2.winner === op) out.push('이 수로 내 모든 손이 사라져 즉시 패배합니다.');
+    else if (killAll) out.push('이 수 직후 상대가 ' + E.moveToStr(P2, R, killAll) + '(' + E.moveText(P2, R, killAll) + ')로 내 남은 손을 모두 소멸시켜 바로 이깁니다.');
+    else if (killOne) out.push('이 수를 두면 상대가 ' + E.moveToStr(P2, R, killOne) + '(' + E.moveText(P2, R, killOne) + ')로 내 손 하나를 없앨 수 있게 됩니다.');
+    if (myAfter < myBefore) out.push('이 수로 내 손이 ' + (myBefore - myAfter) + '개 소멸해 남은 손이 ' + myAfter + '개가 됩니다.');
+    if (bm && bestKills > 0 && opAfter >= opBefore) out.push('최선수(' + bestTxt + ')는 상대 손 ' + bestKills + '개를 소멸시킬 수 있었습니다. 이 수로는 그 기회를 놓쳤습니다.');
+    if (g === 'miss') out.push('이길 수 있는 수(' + bestTxt + ')가 있었지만 이 수로는 무승부 이상을 얻지 못합니다.');
+    else if (bm) out.push('평가 변화: ' + (bm.cls === 'W' ? '이기는 상황' : bm.cls === 'D' ? '무승부 상황' : '불리한 상황') + ' → ' + valTxt(pm) + '. 최선수는 ' + bestTxt + ' (' + valTxt(bm) + ').' + heur);
+    return out;
+  }
+  if ((g === 'good' || g === 'excellent') && bm) {
+    out.push('최선수 ' + bestTxt + ' (' + valTxt(bm) + ')와 같은 결과 범주를 유지하지만 ' + (pm.cls === 'W' ? '승리까지 더 오래 걸립니다.' : '평가가 조금 낮습니다.'));
+  }
+  return out;
+};
+
 function valTxt(m) {
   if (!m) return '';
   if (m.cls === 'W') return '승리 확정(' + Math.ceil(m.dtm / 2) + '수)';
   if (m.cls === 'L') return '패배 확정(' + Math.floor((m.dtm + 1) / 2) + '수)';
-  if (m.cls === 'D') return '무승부';
+  if (m.cls === 'D') return E.drawCtx.ben >= 0 ? '동형 무승부 · ' + (E.drawCtx.ben === 0 ? '백' : '흑') + ' 유리' : '무승부';
   return '평가 ' + (m.cp >= 0 ? '+' : '') + (m.cp / 100).toFixed(2);
 }
 E.valTxt = valTxt;
@@ -989,6 +1062,42 @@ E.bookWalk = function (keys, R) {
   return out;
 };
 
+
+/* ---------------- 동형 금기 ---------------- */
+/* counts: {key: 등장 횟수}. 이 수를 두면 rep 번째 동형이 만들어지는가 */
+E.isTaboo = function (P, R, mv, counts) {
+  if (!R.repBan || !(R.rep > 0)) return false;
+  var Pn = E.applyMove(P, R, mv);
+  if (E.status(Pn).over) return false;
+  return ((counts && counts[E.key(Pn)]) || 0) + 1 >= R.rep;
+};
+E.bannedKeys = function (P, R, counts) {
+  var ban = {};
+  if (!R.repBan || !(R.rep > 0)) return ban;
+  var kids = E.childList(P, R);
+  for (var i = 0; i < kids.length; i++) {
+    if (E.status(kids[i].P2).over) continue;
+    if (((counts && counts[kids[i].key]) || 0) + 1 >= R.rep) ban[kids[i].key] = true;
+  }
+  return ban;
+};
+/* 금기가 아닌 수가 하나도 없는가 (둘 수 없음) */
+/* 금기가 아닌 무작위 수 (AI 예외 처리용) */
+E.randomFreeMove = function (P, R, counts, rnd) {
+  rnd = rnd || Math.random;
+  var ok = E.childList(P, R).filter(function (k) { return E.status(k.P2).over || ((counts && counts[k.key]) || 0) + 1 < (R.repBan && R.rep > 0 ? R.rep : Infinity); });
+  return ok.length ? ok[Math.floor(rnd() * ok.length)].mv : E.randomMove(P, R, rnd);
+};
+E.noFreeMove = function (P, R, counts) {
+  if (!R.repBan || !(R.rep > 0) || E.status(P).over) return false;
+  var kids = E.childList(P, R);
+  for (var i = 0; i < kids.length; i++) {
+    if (E.status(kids[i].P2).over) return false;
+    if (((counts && counts[kids[i].key]) || 0) + 1 < R.rep) return false;
+  }
+  return kids.length > 0;
+};
+
 /* ---------------- 무승부 규칙 ---------------- */
 /* 동형 반복 무승부가 났을 때 승리가 부여되는 쪽 (-1: 무승부 유지) */
 E.drawBeneficiary = function (R, startP) {
@@ -1011,18 +1120,20 @@ E.replay = function (game) {
     if (repAt >= 0) { err = { ply: i, msg: '동형 반복 무승부로 이미 게임이 종료되었습니다.' }; break; }
     var cr = E.checkMove(P, R, game.moves[i]);
     if (cr) { err = { ply: i, msg: cr }; break; }
+    if (E.isTaboo(P, R, game.moves[i], cnt)) { err = { ply: i, msg: '동형 금기 규칙 위반 — ' + R.rep + '수 동형을 만드는 수는 둘 수 없습니다.' }; break; }
     P = E.applyMove(P, R, game.moves[i]);
     states.push(P); var k = E.key(P); keys.push(k);
     cnt[k] = (cnt[k] || 0) + 1;
     if (R.rep > 0 && cnt[k] >= R.rep && !E.status(P).over) repAt = i + 1;
   }
-  return { R: R, states: states, keys: keys, err: err, repAt: repAt, last: P, status: E.status(P) };
+  return { R: R, states: states, keys: keys, err: err, repAt: repAt, last: P, status: E.status(P), stale: (!err && repAt < 0 && E.noFreeMove(P, R, cnt)) };
 };
 /* 대국 결과 판정 (종료 조건이 move 로 드러나는 경우) */
 E.adjudicate = function (game) {
   var rp = E.replay(game), R = rp.R;
   if (rp.err) return null;
   if (rp.status.over) return { result: rp.status.winner === 0 ? '1-0' : '0-1', term: 'elimination' };
+  if (rp.stale) return { result: rp.last.t === 0 ? '0-1' : '1-0', term: 'stalemate' };
   if (rp.repAt >= 0) {
     var ben = E.drawBeneficiary(R, game.start);
     if (ben < 0) return { result: '1/2-1/2', term: 'repetition' };
@@ -1047,7 +1158,7 @@ E.buildPGN = function (game) {
   H('Result', game.result || '*'); H('Termination', game.term || 'unfinished');
   H('TimeControl', E.tcString(game.tc));
   H('Rules', E.isStandard(R) ? 'Standard' : 'Custom'); H('Hands', String(R.hands)); H('DeathThreshold', String(R.death));
-  H('Fractional', R.frac ? '1' : '0'); H('Repetition', String(R.rep)); H('DrawWin', R.drawWin ? '1' : '0'); H('DrawBalance', R.drawBalance ? '1' : '0');
+  H('Fractional', R.frac ? '1' : '0'); H('Repetition', String(R.rep)); H('DrawWin', R.drawWin ? '1' : '0'); H('DrawBalance', R.drawBalance ? '1' : '0'); if (R.repBan) H('RepBan', '1');
   H('StartFEN', E.toFEN(P0, R));
   if (game.durationMs != null) H('Duration', (game.durationMs / 1000).toFixed(1));
   if (game.remain) H('RemainMs', Math.round(game.remain[0]) + ',' + Math.round(game.remain[1]));
@@ -1111,6 +1222,7 @@ E.parsePGN = function (text) {
   if (headers.Repetition !== undefined) { if (!/^(0|3|5)$/.test(headers.Repetition)) return { err: { line: 1, col: 1, msg: '헤더 Repetition 은 0, 3, 5 중 하나여야 합니다.' } }; rulesIn.rep = +headers.Repetition; }
   if (headers.DrawWin !== undefined) rulesIn.drawWin = headers.DrawWin === '1';
   if (headers.DrawBalance !== undefined) rulesIn.drawBalance = headers.DrawBalance === '1';
+  if (headers.RepBan !== undefined) rulesIn.repBan = headers.RepBan === '1';
   var R = E.normRules(rulesIn), start;
   if (headers.StartFEN !== undefined) {
     fenRes = E.parseFEN(headers.StartFEN);
@@ -1121,7 +1233,7 @@ E.parsePGN = function (text) {
     var fr = fenRes.R;
     if ((rulesIn.hands !== undefined && rulesIn.hands !== fr.hands) || (rulesIn.death !== undefined && rulesIn.death !== fr.death) || (rulesIn.frac !== undefined && rulesIn.frac !== fr.frac))
       return { err: { line: 1, col: 1, msg: 'StartFEN 과 헤더(Hands/DeathThreshold/Fractional)의 규칙이 서로 다릅니다.' } };
-    R = E.normRules({ death: fr.death, hands: fr.hands, frac: fr.frac, rep: rulesIn.rep !== undefined ? rulesIn.rep : fr.rep, drawWin: rulesIn.drawWin !== undefined ? rulesIn.drawWin : fr.drawWin, drawBalance: rulesIn.drawBalance !== undefined ? rulesIn.drawBalance : fr.drawBalance });
+    R = E.normRules({ death: fr.death, hands: fr.hands, frac: fr.frac, rep: rulesIn.rep !== undefined ? rulesIn.rep : fr.rep, drawWin: rulesIn.drawWin !== undefined ? rulesIn.drawWin : fr.drawWin, drawBalance: rulesIn.drawBalance !== undefined ? rulesIn.drawBalance : fr.drawBalance, repBan: rulesIn.repBan !== undefined ? rulesIn.repBan : fr.repBan });
     start = fenRes.P;
   } else start = E.startPos(R);
   var vp = E.validatePos(start, R, { allowTerminal: true });
@@ -1165,8 +1277,10 @@ E.parsePGN = function (text) {
     if (pr.err) return { err: { line: at.line, col: at.col, msg: '수 ' + (game.moves.length + 1) + ' (' + tok + '): ' + pr.err } };
     var ce = E.checkMove(P, R, pr.mv);
     if (ce) return { err: { line: at.line, col: at.col, msg: '수 ' + (game.moves.length + 1) + ' (' + tok + '): ' + ce } };
+    var Pn0 = E.applyMove(P, R, pr.mv);
+    if (E.isTaboo(P, R, pr.mv, cnt)) return { err: { line: at.line, col: at.col, msg: '수 ' + (game.moves.length + 1) + ' (' + tok + '): 동형 금기 규칙 위반 — ' + R.rep + '수 동형을 만드는 수는 둘 수 없습니다.' } };
     game.moves.push(pr.mv); lastMove = game.moves.length - 1;
-    P = E.applyMove(P, R, pr.mv);
+    P = Pn0;
     var kk = E.key(P); cnt[kk] = (cnt[kk] || 0) + 1;
     if (R.rep > 0 && cnt[kk] >= R.rep && !E.status(P).over) repAt = game.moves.length;
   }
@@ -1236,25 +1350,27 @@ E.aiMove = function (P, R, level, ctx) {
   var rnd = ctx.rnd || Math.random, me = P.t, t0 = Date.now();
   var pathCounts = new Map(); if (ctx.repCounts) Object.keys(ctx.repCounts).forEach(function (k) { pathCounts.set(k, ctx.repCounts[k]); });
   var info = null, chosen = null, notes = '';
+  var ban = R.repBan ? E.bannedKeys(P, R, ctx.repCounts || {}) : null;
   if (level <= 1) {
+    if (ban) { var okk = E.childList(P, R).filter(function (k) { return !ban[k.key]; }); if (okk.length) return { mv: pickRandom(okk, rnd).mv, info: { exact: false, depth: 0, nodes: 0, ms: 0, note: '무작위' } }; }
     return { mv: E.randomMove(P, R, rnd), info: { exact: false, depth: 0, nodes: 0, ms: 0, note: '무작위' } };
   }
   var pick;
   if (level === 2) {
-    info = E.analyzePos(P, R, { forceHeuristic: true, depth: 1, timeMs: 100, basic: true, pathCounts: pathCounts });
+    info = E.analyzePos(P, R, { forceHeuristic: true, depth: 1, timeMs: 100, basic: true, pathCounts: pathCounts, ban: ban });
     pick = (rnd() < 0.3) ? pickRandom(info.moves, rnd) : pickRandom(info.moves.filter(function (m) { return m.score >= info.bestScore - 5; }), rnd);
   } else if (level === 3) {
-    info = E.analyzePos(P, R, { forceHeuristic: true, depth: 2, timeMs: 200, basic: true, pathCounts: pathCounts });
+    info = E.analyzePos(P, R, { forceHeuristic: true, depth: 2, timeMs: 200, basic: true, pathCounts: pathCounts, ban: ban });
     pick = (rnd() < 0.12) ? pickRandom(info.moves, rnd) : pickRandom(info.moves.filter(function (m) { return m.score >= info.bestScore - 8; }), rnd);
   } else if (level === 4) {
-    info = E.analyzePos(P, R, { forceHeuristic: true, depth: 4, timeMs: 400, pathCounts: pathCounts });
+    info = E.analyzePos(P, R, { forceHeuristic: true, depth: 4, timeMs: 400, pathCounts: pathCounts, ban: ban });
     var top = info.moves.slice(0, 3);
     pick = (rnd() < 0.06) ? pickRandom(top, rnd) : pickRandom(info.moves.filter(function (m) { return m.score >= info.bestScore - 6; }), rnd);
   } else if (level === 5) {
-    info = E.analyzePos(P, R, { forceHeuristic: true, depth: 9, timeMs: ctx.timeMs || 700, pathCounts: pathCounts });
+    info = E.analyzePos(P, R, { forceHeuristic: true, depth: 9, timeMs: ctx.timeMs || 700, pathCounts: pathCounts, ban: ban });
     pick = pickRandom(info.moves.filter(function (m) { return m.score >= info.bestScore - 3; }), rnd);
   } else {
-    info = E.analyzePos(P, R, { depth: level === 6 ? 14 : 30, timeMs: ctx.timeMs || (level === 6 ? 1200 : 2500), pathCounts: pathCounts });
+    info = E.analyzePos(P, R, { depth: level === 6 ? 14 : 30, timeMs: ctx.timeMs || (level === 6 ? 1200 : 2500), pathCounts: pathCounts, ban: ban });
     var df = ctx.drawFor, eff = function (m) {
       var sc = m.score;
       if (m.cls === 'D' && df !== undefined && df >= 0) {
@@ -1293,7 +1409,9 @@ E.handle = function (msg) {
     case 'line': {
       var game = msg.game, rp = E.replay(game), out = [], items = [], book = E.bookWalk(rp.keys, rp), i;
       for (i = 0; i < game.moves.length && i < rp.states.length - 1; i++) {
-        var P = rp.states[i], info2 = E.analyzePos(P, rp.R, msg.opts || {});
+        var P = rp.states[i], o2 = msg.opts || {};
+        if (rp.R.repBan) { var cn = {}; for (var z = 0; z <= i; z++) cn[rp.keys[z]] = (cn[rp.keys[z]] || 0) + 1; o2 = Object.assign({}, o2, { ban: E.bannedKeys(P, rp.R, cn) }); }
+        var info2 = E.analyzePos(P, rp.R, o2);
         var g = E.gradeMove(P, rp.R, info2, game.moves[i], { inBook: book[i] && book[i].book });
         out.push({ info: slim(info2), grade: g.grade, text: g.text, acc: g.acc, played: g.played, bestMove: g.bestMove, bookName: book[i] ? book[i].name : null });
         items.push({ side: P.t, grade: g.grade, acc: g.acc, trivial: E.isTrivial(info2, g.played) });
@@ -1631,7 +1749,7 @@ Store.init();
 /* ---------- 설정 ---------- */
 var DEFAULTS = {
   res: 'auto', handStyle: 'hand', colorW: '#f3f1ec', colorB: '#34343c', evalBar: false, rotate: true, numColors: true,
-  fischer: false, decimals: 'u20', timeFmt: 'mmss', randomStart: false, rep: 5, drawWin: true, drawBalance: false,
+  fischer: false, decimals: 'u20', timeFmt: 'mmss', randomStart: false, rep: 5, drawWin: true, drawBalance: false, repBan: true,
   death: 5, hands: 2, frac: false, nameW: '백', nameB: '흑', playerName: '나', recent: { tcW: 600 }, tc: 600, aiLevel: 4, aiColor: 'w', sound: false
 };
 var Settings = {
@@ -1640,7 +1758,7 @@ var Settings = {
   set: function (k, val) { this.v[k] = val; Store.set('cs.settings', this.v); applyVisual(); },
   rules: function () {
     var v = this.v;
-    return E.normRules({ death: v.death, hands: v.hands, frac: v.frac, rep: v.rep, drawWin: v.drawWin, drawBalance: v.drawBalance });
+    return E.normRules({ death: v.death, hands: v.hands, frac: v.frac, rep: v.rep, drawWin: v.drawWin, drawBalance: v.drawBalance, repBan: v.repBan });
   },
   reset: function () { this.v = JSON.parse(JSON.stringify(DEFAULTS)); Store.set('cs.settings', this.v); applyVisual(); }
 };
@@ -1805,7 +1923,7 @@ var AnCache = {
   m: new Map(), pending: new Map(),
   key: function (P, R, depthSig) { return rulesSig(R) + '#' + depthSig + '#' + ordKey(P); },
   get: function (P, R, o) {
-    o = o || {}; var self = this, sig = (o.depth || 0) + '/' + (o.timeMs || 0), k = this.key(P, R, sig);
+    o = o || {}; var self = this, sig = (o.depth || 0) + '/' + (o.timeMs || 0) + (o.ban ? '/b' + Object.keys(o.ban).sort().join(';') : ''), k = this.key(P, R, sig);
     if (this.m.has(k)) return Promise.resolve(this.m.get(k));
     if (this.pending.has(k)) return this.pending.get(k);
     // 정확 모드는 깊이와 무관하므로 별도 키로도 공유
@@ -1818,7 +1936,10 @@ var AnCache = {
 
 /* ---------- 평가치 표기 ---------- */
 /* info.value 는 움직일 쪽 기준 → 백 기준으로 변환 */
-function whiteEval(info, P) {
+var DrawSide = -1;   // 무승부=승리 규칙에서 동형 무승부의 승자 쪽(-1: 해당 없음)
+function setDrawSide(R, start) { DrawSide = E.drawEvalSide(R, start); E.drawCtx.ben = DrawSide; }
+function whiteEval(info, P, ben) {
+  if (ben === undefined) ben = DrawSide;
   if (!info || !info.value) return null;
   var v = info.value, sgn = P.t === 0 ? 1 : -1, cls = v.cls, out = { exact: info.exact };
   if (info.over) { out.kind = 'over'; out.pct = P.t === 0 ? 0 : 100; out.label = '종료'; return out; }
@@ -1827,7 +1948,8 @@ function whiteEval(info, P) {
     if (cls === 'L') n = Math.floor(v.dtm / 2) || 1;
     out.kind = 'mate'; out.winner = winner; out.n = n; out.pct = winner === 0 ? 100 : 0;
     out.label = (winner === 0 ? '+' : '-') + 'M' + n;
-  } else if (cls === 'D') { out.kind = 'draw'; out.pct = 50; out.label = '0.0'; }
+  } else if (cls === 'D' && ben >= 0) { out.kind = 'drawwin'; out.winner = ben; out.pct = ben === 0 ? 75 : 25; out.label = (ben === 0 ? '+' : '-') + '동형'; }
+  else if (cls === 'D') { out.kind = 'draw'; out.pct = 50; out.label = '0.0'; }
   else {
     var cp = v.cp * sgn; out.kind = 'cp'; out.cp = cp; out.pct = clamp(50 + 50 * Math.tanh(cp / 260), 4, 96);
     out.label = (cp >= 0 ? '+' : '') + (cp / 100).toFixed(1);
@@ -1836,7 +1958,7 @@ function whiteEval(info, P) {
 }
 function evalBarHTML(ev, note) {
   var pct = ev ? ev.pct : 50, label = ev ? ev.label : '…';
-  var sub = ev ? (ev.kind === 'mate' ? '강제 승리' : ev.kind === 'draw' ? (ev.exact ? '무승부 (정확)' : '균형') : ev.kind === 'cp' ? '휴리스틱' : '') : '계산 중';
+  var sub = ev ? (ev.kind === 'mate' ? '강제 승리' : ev.kind === 'drawwin' ? ((ev.winner === 0 ? '백' : '흑') + ' 유리 · 동형 무승부=승') : ev.kind === 'draw' ? (ev.exact ? '무승부 (정확)' : '균형') : ev.kind === 'cp' ? '휴리스틱' : '') : '계산 중';
   return '<div class="ebar" role="img" aria-label="평가치 ' + esc(label) + '"><div class="ew" style="width:' + pct + '%"></div><div class="elab ' + (pct >= 50 ? 'l' : 'r') + '">' + esc(label) + '</div><div class="esub">' + esc(sub) + (note ? ' · ' + esc(note) : '') + '</div></div>';
 }
 
@@ -1873,6 +1995,7 @@ function rulesLabel(R) {
   }
   parts.push(R.rep ? R.rep + '수 동형' : '동형 없음');
   if (R.drawWin) parts.push('무승부=' + (R.drawBalance ? '밸런스 승' : '선공 승'));
+  if (R.repBan) parts.push('동형 금기');
   return parts.join(' · ');
 }
 
@@ -2024,8 +2147,8 @@ function openDistPanel(host, opts) {
   var head = '<div class="dhead"><b>분배하기</b><span class="dmeta">현재 ' + esc(E.fmtHands(cur, S_)) + ' · 가능한 분배 ' + cnt + '가지' + (L.truncated ? ' (처음 ' + L.dists.length + '개 표시)' : '') + '</span><button class="x" aria-label="닫기">' + IC.close + '</button></div>';
   var chips = '', i;
   L.dists.forEach(function (d, idx) {
-    var same = d.v.join() === cur.join(), mk = opts.mark ? opts.mark(d.v) : null;
-    chips += '<button class="chip' + (same ? ' same' : '') + (mk && mk.cls ? ' ' + mk.cls : '') + '" data-idx="' + idx + '" title="' + esc((same ? '현재 배치 그대로 — 턴 넘기기' : '') + (mk && mk.title ? ' ' + mk.title : '')) + '">' + d.v.map(function (x) { return '<i class="cv" data-z="' + (x === 0 ? 'z' : '') + '">' + esc(E.fmt(x, S_)) + '</i>'; }).join('') + (same ? '<small>유지</small>' : '') + (mk && mk.icon ? '<span class="cmark">' + mk.icon + '</span>' : '') + '</button>';
+    var same = d.v.join() === cur.join(), mk = opts.mark ? opts.mark(d.v) : null, tb = opts.taboo && opts.taboo({ k: 'd', v: d.v });
+    chips += '<button class="chip' + (tb ? ' taboo' : '') + (same ? ' same' : '') + (mk && mk.cls ? ' ' + mk.cls : '') + '" data-idx="' + idx + '" title="' + esc((same ? '현재 배치 그대로 — 턴 넘기기' : '') + (mk && mk.title ? ' ' + mk.title : '')) + '">' + d.v.map(function (x) { return '<i class="cv" data-z="' + (x === 0 ? 'z' : '') + '">' + esc(E.fmt(x, S_)) + '</i>'; }).join('') + (same ? '<small>유지</small>' : '') + (mk && mk.icon ? '<span class="cmark">' + mk.icon + '</span>' : '') + '</button>';
   });
   var steppers = '';
   if (n > 1) {
@@ -2045,10 +2168,10 @@ function openDistPanel(host, opts) {
   }
   box.addEventListener('click', function (e) {
     var c = e.target.closest('.chip');
-    if (c) { opts.onPick({ k: 'd', v: L.dists[+c.dataset.idx].v.slice() }); return; }
+    if (c) { var cm = { k: 'd', v: L.dists[+c.dataset.idx].v.slice() }; if (opts.taboo && opts.taboo(cm)) { toast('동형 금기: 이 분배는 ' + R.rep + '수 동형을 만들어 둘 수 없습니다', 'err'); return; } opts.onPick(cm); return; }
     var m = e.target.closest('.mn');
     if (m) { var k = +m.dataset.k, d = +m.dataset.d, step = 1; vals[k] = clamp(vals[k] + d * step, 0, R.M); refresh(); return; }
-    if (e.target.closest('.dok')) { var mv = { k: 'd', v: vals.slice() }, er = E.checkMove(P, R, mv); if (er) { toast(er, 'err'); return; } opts.onPick(mv); return; }
+    if (e.target.closest('.dok')) { var mv = { k: 'd', v: vals.slice() }, er = E.checkMove(P, R, mv); if (er) { toast(er, 'err'); return; } if (opts.taboo && opts.taboo(mv)) { toast('동형 금기: 이 분배는 ' + R.rep + '수 동형을 만들어 둘 수 없습니다', 'err'); return; } opts.onPick(mv); return; }
     if (e.target.closest('.x')) { if (opts.onCancel) opts.onCancel(); }
   });
   host.innerHTML = ''; host.appendChild(box); refresh();
@@ -2118,6 +2241,7 @@ function termText(g) {
   else if (g.term === 'resign') s = (g.result === '1-0' ? '흑' : '백') + ' 기권';
   else if (g.term === 'elimination') s = (g.result === '1-0' ? '흑' : '백') + '의 모든 손 소멸';
   else if (g.term === 'repetition') s = '동형 반복 무승부';
+  else if (g.term === 'stalemate') s = (g.result === '1-0' ? '흑' : '백') + '이(가) 동형 금기 때문에 둘 수 있는 수가 없음';
   return s;
 }
 function pgnErrorBox(text, err) {
@@ -2152,7 +2276,7 @@ var Game = {
   start: function (g, opts) {
     opts = opts || {};
     this.stopTimers();
-    this.g = g; this.R = E.normRules(g.rules); this.humanSide = opts.humanSide || 0; this.sel = null; this.distOpen = false; this.viewPly = null; this.thinking = false; this.aiToken++;
+    this.g = g; this.R = E.normRules(g.rules); setDrawSide(this.R, g.start); this.humanSide = opts.humanSide || 0; this.sel = null; this.distOpen = false; this.viewPly = null; this.thinking = false; this.aiToken++;
     this.P = E.clonePos(g.start); this.snaps = []; this.redo = []; this.repCounts = {}; this.repCounts[E.key(this.P)] = 1; this.last = null;
     var base = (g.tc && g.tc.base) ? g.tc.base * 1000 : 0; this.rem = [base, base]; this.snaps.push([base, base]);
     this.pausedMs = 0; this.playMs = 0; this.saved = true; this.status = 'play';
@@ -2238,6 +2362,7 @@ var Game = {
     if (this.status !== 'play') return false;
     var P = this.P, R = this.R, err = E.checkMove(P, R, mv);
     if (err) { toast(err, 'err'); return false; }
+    if (E.isTaboo(P, R, mv, this.repCounts)) { toast('동형 금기: 이 수는 ' + R.rep + '수 동형을 만들어 둘 수 없습니다', 'err'); return false; }
     var me = P.t, now = performance.now(), elapsed = this.running ? (now - this.turnStart) : 0;
     if (this.timed()) {
       if (this.rem[me] - elapsed <= 0) { this.timeout(me); return false; }
@@ -2264,6 +2389,9 @@ var Game = {
       if (ben < 0) this.finish('1/2-1/2', 'repetition', false); else this.finish(ben === 0 ? '1-0' : '0-1', 'repetition', true);
       return true;
     }
+    if (E.noFreeMove(Pn, R, this.repCounts)) {   // 금기가 아닌 수가 하나도 없음 → 둘 수 없는 쪽 패배
+      this.render(); this.finish(Pn.t === 0 ? '0-1' : '1-0', 'stalemate', false); return true;
+    }
     this.render(); this.saveActive(); this.maybeAI();
     return true;
   },
@@ -2284,11 +2412,11 @@ var Game = {
         if (self.status !== 'play') { self.pendingAI = r.mv; return; }
         self.applyAI(r.mv, r.info);
       }, wait);
-    }, function (e) { if (e && e.message === 'cancelled') return; console.error(e); self.applyAI(E.randomMove(P, self.R)); });
+    }, function (e) { if (e && e.message === 'cancelled') return; console.error(e); self.applyAI(E.randomFreeMove(P, self.R, self.repCounts)); });
   },
   applyAI: function (mv, info) {
     var P = this.P; this.thinking = false;
-    if (E.checkMove(P, this.R, mv)) { mv = E.randomMove(P, this.R); }
+    if (E.checkMove(P, this.R, mv) || E.isTaboo(P, this.R, mv, this.repCounts)) { mv = E.randomFreeMove(P, this.R, this.repCounts); }
     this.playMove(mv, 'ai');
   },
 
@@ -2516,7 +2644,7 @@ var Game = {
     else statusTxt = '<b class="turn s' + me + '">' + (me === 0 ? '백' : '흑') + ' 차례</b> — ' + (this.sel ? '공격할 상대 손을 선택하세요' : this.distOpen ? '분배 결과를 선택하세요' : '내 손을 눌러 공격하거나 분배하기를 누르세요');
     if (this.distOpen && canAct) {
       var existing = $('.dist', mid);
-      if (!existing) openDistPanel(mid, { P: P, R: R, onPick: function (mv) { self.playMove(mv); }, onCancel: function () { self.distOpen = false; self.render(); } });
+      if (!existing) openDistPanel(mid, { P: P, R: R, taboo: R.repBan ? function (m) { return E.isTaboo(P, R, m, self.repCounts); } : null, onPick: function (mv) { self.playMove(mv); }, onCancel: function () { self.distOpen = false; self.render(); } });
     } else {
       mid.innerHTML = '<div class="mstat">' + statusTxt + '</div>' + (this.last && live && !this.distOpen ? '<div class="mlast"><span>최근 수</span> ' + esc(this.last.text) + '</div>' : '');
       var bl = $('#backLive', mid); if (bl) bl.onclick = function () { self.viewAt(g.moves.length); };
@@ -2542,10 +2670,10 @@ var Game = {
     if (E.status(P).over) { host.innerHTML = evalBarHTML(whiteEval({ value: { cls: 'L', dtm: 0 }, over: true, exact: true }, P)); return; }
     if (!host.innerHTML) host.innerHTML = evalBarHTML(null);
     if (this.thinking) return;
-    Cap.opts(R, { depth: 7, timeMs: 350 }).then(function (o) { return AnCache.get(P, R, o); }).then(function (info) {
+    Cap.opts(R, { depth: 7, timeMs: 350 }).then(function (o) { if (R.repBan) o = Object.assign({}, o, { ban: E.bannedKeys(P, R, self.repCounts) }); return AnCache.get(P, R, o); }).then(function (info) {
       if (tok !== self.evalTok) return;
       var ev = whiteEval(info, P);
-      var note = (!info.exact && info.depth) ? '깊이 ' + info.depth : (R.drawWin && info.value && info.value.cls === 'D' ? '무승부는 승리 규칙 적용 중' : '');
+      var note = (!info.exact && info.depth) ? '깊이 ' + info.depth : '';
       host.innerHTML = evalBarHTML(ev, note);
     }, function () { });
   },
@@ -2697,7 +2825,7 @@ var Analysis = {
     this.load(g, 0, 0); go('analysis');
   },
   load: function (g, cursor, view) {
-    this.tok++; this.g = g; this.R = E.normRules(g.rules); this.view = view; this.sel = null; this.distOpen = false; this.infos = []; this.res = []; this.done = false; this.progress = 0;
+    this.tok++; this.g = g; this.R = E.normRules(g.rules); setDrawSide(this.R, g.start); this.view = view; this.sel = null; this.distOpen = false; this.infos = []; this.res = []; this.done = false; this.progress = 0;
     if (!g.clocks) g.clocks = [];
     this.recompute(); this.cursor = clamp(cursor, 0, g.moves.length);
     Engine.call({ type: 'warm', rules: E.ruleCore(this.R) }).catch(function () { });
@@ -2716,13 +2844,14 @@ var Analysis = {
     var self = this, P = this.states[i], R = this.R;
     if (this.infos[i] && this.infos[i].moves) return Promise.resolve(this.infos[i]);
     return Cap.opts(R, { depth: this.opts.depth, timeMs: this.opts.timeMs }).then(function (o) {
+      if (R.repBan) { var cn = {}; for (var z = 0; z <= i && z < self.keys.length; z++) cn[self.keys[z]] = (cn[self.keys[z]] || 0) + 1; o = Object.assign({}, o, { ban: E.bannedKeys(P, R, cn) }); }
       return AnCache.get(P, R, o);
     }).then(function (info) { self.infos[i] = info; return info; });
   },
   gradeAt: function (i) {
     // i: 수 번호(0-based) → states[i] 에서 moves[i] 를 둔 평가
     var info = this.infos[i], mv = this.g.moves[i]; if (!info || !mv) return null;
-    var bk = this.book[i], r = E.gradeMove(this.states[i], this.R, info, mv, { inBook: !!(bk && bk.book) });
+    var bk = this.book[i], r = E.gradeMove(this.states[i], this.R, info, mv, { inBook: !!(bk && bk.book), ben: E.drawCtx.ben });
     return r;
   },
   startLine: function () {
@@ -2749,6 +2878,7 @@ var Analysis = {
     var c = this.cursor, P = this.states[c], R = this.R;
     if (this.isOverAt(c)) { toast('이미 종료된 포지션입니다', 'err'); return; }
     var err = E.checkMove(P, R, mv); if (err) { toast(err, 'err'); return; }
+    if (R.repBan) { var cn = {}; for (var z = 0; z <= c; z++) cn[this.keys[z]] = (cn[this.keys[z]] || 0) + 1; if (E.isTaboo(P, R, mv, cn)) { toast('동형 금기: 이 수는 ' + R.rep + '수 동형을 만들어 둘 수 없습니다', 'err'); return; } }
     var nxt = this.g.moves[c], same = false;
     if (nxt) { same = E.key(E.applyMove(P, R, nxt)) === E.key(E.applyMove(P, R, mv)) && JSON.stringify(nxt) === JSON.stringify(mv); }
     if (!same) {
@@ -2954,7 +3084,7 @@ var Analysis = {
     if (c > 0 && o.grade) {
       var r = this.res[c - 1];
       if (r && r.grade) {
-        h += '<div class="apan gr"><div class="grh">' + gradeIcon(r.grade, 30) + '<div><b class="gname" style="color:' + GRADE[r.grade].c + '">' + E.GRADE_NAME[r.grade] + '</b><small>' + esc(E.moveToStr(this.states[c - 1], R, g.moves[c - 1])) + ' · ' + esc(E.moveText(this.states[c - 1], R, g.moves[c - 1])) + '</small></div></div><p>' + esc(r.text) + '</p>';
+        h += '<div class="apan gr"><div class="grh">' + gradeIcon(r.grade, 30) + '<div><b class="gname" style="color:' + GRADE[r.grade].c + '">' + E.GRADE_NAME[r.grade] + '</b><small>' + esc(E.moveToStr(this.states[c - 1], R, g.moves[c - 1])) + ' · ' + esc(E.moveText(this.states[c - 1], R, g.moves[c - 1])) + '</small></div></div><p>' + esc(r.text) + '</p>' + ((r.why && r.why.length) ? '<ul class="why"><li>' + r.why.map(esc).join('</li><li>') + '</li></ul>' : '');
         var ii = this.infos[c - 1], bm = r.bestMove;
         h += '<table class="kv"><tr><td>실제로 둔 수</td><td>' + esc(E.moveToStr(this.states[c - 1], R, g.moves[c - 1])) + ' <i>' + esc(E.valTxt(r.played)) + '</i></td></tr>';
         if (bm) h += '<tr><td>엔진 최선수</td><td>' + esc(E.moveToStr(this.states[c - 1], R, bm.mv)) + ' <i>' + esc(E.valTxt(bm)) + '</i></td></tr>';
@@ -3053,7 +3183,7 @@ var PosEditor = {
   R: null, P: null, board: null,
   enter: function (preset) {
     var R = preset && preset.rules ? E.normRules(preset.rules) : Settings.rules();
-    this.rules = { death: R.death, hands: R.hands, frac: R.frac, rep: R.rep, drawWin: R.drawWin, drawBalance: R.drawBalance };
+    this.rules = { death: R.death, hands: R.hands, frac: R.frac, rep: R.rep, drawWin: R.drawWin, drawBalance: R.drawBalance, repBan: R.repBan };
     var P = preset && preset.P ? preset.P : E.startPos(R); this.h = [P.h[0].map(function (u) { return u; }), P.h[1].map(function (u) { return u; })]; this.t = P.t;
     this.draw();
   },
@@ -3120,7 +3250,7 @@ var PosEditor = {
   loadFen: function () {
     var txt = $('#peFen').value, r = E.parseFEN(txt);
     if (r.err) { toast('FEN 오류: ' + r.err, 'err', 4200); return; }
-    this.rules = { death: r.R.death, hands: r.R.hands, frac: r.R.frac, rep: r.R.rep, drawWin: r.R.drawWin, drawBalance: r.R.drawBalance };
+    this.rules = { death: r.R.death, hands: r.R.hands, frac: r.R.frac, rep: r.R.rep, drawWin: r.R.drawWin, drawBalance: r.R.drawBalance, repBan: r.R.repBan };
     this.h = [r.P.h[0].slice(), r.P.h[1].slice()]; this.t = r.P.t; this.draw();
     var errs = this.errors(); if (errs.length) toast('불러왔지만 포지션이 유효하지 않습니다: ' + errs[0], 'err', 4200); else toast('FEN 을 불러왔습니다');
   }
@@ -3214,7 +3344,7 @@ var VideoMaker = {
   },
   support: function () { return !!(window.MediaRecorder && HTMLCanvasElement.prototype.captureStream); },
   pickMime: function () {
-    var c = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4;codecs=avc1', 'video/mp4'];
+    var c = ['video/mp4;codecs=avc1.42E01E', 'video/mp4;codecs=avc1', 'video/mp4;codecs=h264', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
     for (var i = 0; i < c.length; i++) { try { if (MediaRecorder.isTypeSupported(c[i])) return c[i]; } catch (e) { } }
     return '';
   },
@@ -3236,14 +3366,17 @@ var VideoMaker = {
           rec.onstop = function () { if (cancelled) { reject(new Error('cancelled')); return; } resolve({ blob: new Blob(chunks, { type: mime.split(';')[0] }), mime: mime }); };
           rec.start(250);
         }
-        var t0 = performance.now(), last = -1;
+        var vt = 0, lastWall = performance.now(), hidden = document.hidden;
+        function onVis() { hidden = document.hidden; lastWall = performance.now(); if (rec && rec.state !== 'inactive') { try { if (hidden && rec.state === 'recording') rec.pause(); else if (!hidden && rec.state === 'paused') rec.resume(); } catch (e) { } } }
+        document.addEventListener('visibilitychange', onVis);
+        function done() { document.removeEventListener('visibilitychange', onVis); }
         function frame() {
-          if (cancelled) { if (rec && rec.state !== 'inactive') rec.stop(); else reject(new Error('cancelled')); return; }
-          var t = (performance.now() - t0) / 1000;
+          if (cancelled) { done(); if (rec && rec.state !== 'inactive') { try { if (rec.state === 'paused') rec.resume(); } catch (e) { } rec.stop(); } else reject(new Error('cancelled')); return; }
+          var nowW = performance.now(); if (!hidden) vt += Math.min((nowW - lastWall) / 1000, 0.1); lastWall = nowW; var t = vt;
           if (t >= total) {
             self.drawFrame(ctx, W, H, { P: rp.last, R: R, g: g, ply: n, title: resultText(g), sub: termText(g), prog: 1 });
             if (o.onProgress) o.onProgress(1);
-            if (rec) { setTimeout(function () { rec.stop(); }, 150); } else resolve({ blob: null });
+            done(); if (rec) { setTimeout(function () { try { if (rec.state === 'paused') rec.resume(); } catch (e) { } rec.stop(); }, 200); } else resolve({ blob: null });
             return;
           }
           if (t < intro) self.drawFrame(ctx, W, H, { P: rp.states[0], R: R, g: g, ply: 0, prog: t / total });
@@ -3253,9 +3386,9 @@ var VideoMaker = {
             else self.drawFrame(ctx, W, H, { P: rp.states[k + 1], prevP: rp.states[k], R: R, g: g, ply: k + 1, mv: g.moves[k], t: lt, prog: t / total });
           }
           if (o.onProgress) o.onProgress(t / total);
-          requestAnimationFrame(frame);
+          setTimeout(frame, 33);
         }
-        requestAnimationFrame(frame);
+        frame();
       });
     });
     p.job = job; return p;
@@ -3318,16 +3451,20 @@ var Share = {
   makeVideo: function (sup) {
     var g = this.g, out = $('#vOut'), prog = $('#vProg'), bar = $('i', prog), lab = $('span', prog), self = this;
     var cvPrev = null; out.innerHTML = ''; prog.hidden = false; $('#vMake').disabled = true; $('#vCancel').hidden = false;
-    var p = VideoMaker.make(g, { speed: +$('#vSpd').value, record: sup, onProgress: function (x) { bar.style.width = Math.round(x * 100) + '%'; lab.textContent = '생성 중… ' + Math.round(x * 100) + '%'; } });
+    var p = VideoMaker.make(g, { speed: +$('#vSpd').value, record: sup, onProgress: function (x) { bar.style.width = Math.round(x * 100) + '%'; lab.textContent = '생성 중… ' + Math.round(x * 100) + '% (화면을 켠 채 기다려 주세요)'; } });
     $('#vCancel').onclick = function () { p.job.cancel(); };
     p.then(function (r) {
       prog.hidden = true; $('#vMake').disabled = false; $('#vCancel').hidden = true;
       if (!r.blob) { out.innerHTML = '<p class="hint">미리보기 재생이 끝났습니다.</p>'; return; }
       var url = URL.createObjectURL(r.blob), ext = r.mime.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
       out.innerHTML = '<video controls playsinline src="' + url + '" class="vid"></video><div class="row2 wrap"><a class="btn primary" id="vDl" download="chopsticks-game.' + ext + '" href="' + url + '">영상 다운로드 (.' + ext + ')</a><button class="btn" id="vShare">공유</button></div><p class="hint">크기 ' + (r.blob.size / 1024).toFixed(0) + 'KB · ' + esc(r.mime) + '</p>';
+      if (ext === 'webm') $('#vOut').insertAdjacentHTML('beforeend', '<p class="hint bad">이 브라우저는 mp4 녹화를 지원하지 않아 webm 으로 만들었습니다. 카카오톡 등 일부 메신저는 webm 을 열지 못할 수 있으니, 갤럭시/아이폰의 Chrome·Safari 에서 만들거나 아래 "텍스트 공유"를 이용하세요.</p>');
+      if (ext === 'webm') { var vEl = $('video', out); vEl.addEventListener('loadedmetadata', function () { if (vEl.duration === Infinity) { vEl.currentTime = 1e101; vEl.addEventListener('timeupdate', function fix() { vEl.removeEventListener('timeupdate', fix); vEl.currentTime = 0; }); } }); }
       $('#vShare').onclick = function () {
-        var f = new File([r.blob], 'chopsticks-game.' + ext, { type: r.blob.type });
-        if (navigator.canShare && navigator.canShare({ files: [f] })) navigator.share({ files: [f], title: '젓가락 게임 영상' }).catch(function () { }); else toast('이 기기는 파일 공유를 지원하지 않습니다. 다운로드를 이용하세요.');
+        var f = new File([r.blob], 'chopsticks-game.' + ext, { type: r.blob.type || (ext === 'mp4' ? 'video/mp4' : 'video/webm') });
+        if (navigator.canShare && navigator.canShare({ files: [f] })) {
+          navigator.share({ files: [f] }).catch(function (e) { if (e && e.name !== 'AbortError') toast('영상 공유에 실패했습니다. 다운로드한 뒤 카카오톡에서 직접 첨부해 주세요.', 'err', 4500); });
+        } else toast('이 기기·브라우저는 영상 파일 공유를 지원하지 않습니다. 다운로드한 뒤 카카오톡에서 직접 첨부해 주세요.', 'err', 4500);
       };
     }, function (e) {
       prog.hidden = true; $('#vMake').disabled = false; $('#vCancel').hidden = true;
@@ -3370,7 +3507,7 @@ var HistoryView = {
 var TYPE_NAME = { stable: '안정적 분배', attack: '공격 중심', kill: '빠른 손 소멸', induce: '분배 유도', defense: '방어 중심', revive: '부활 전략', mixed: '공방 혼합', trap: '함정 (특정 실수 유도)', bad: '비추천 라인' };
 var Openings = {
   cur: null, li: 0, ply: 0, filter: 'all', practice: false, board: null, sel: null, distOpen: false, hint: false, R: null, startedPractice: false,
-  enter: function () { this.R = E.normRules(E.defaultRules()); if (!this.cur) this.cur = E.openings.list[0]; this.draw(); },
+  enter: function () { this.R = E.normRules(E.defaultRules()); setDrawSide(this.R); if (!this.cur) this.cur = E.openings.list[0]; this.draw(); },
   line: function () { return this.cur.lines[this.li] || this.cur.lines[0]; },
   analyze: function (P) { return E.analyzePos(P, this.R, {}); },
   lineQuality: function (L) {
@@ -3519,6 +3656,7 @@ var SettingsUI = {
       h += seg('decimals', '소수점 시간 표시', [['off', '완전히 끄기'], ['always', '항상 표시'], ['u20', '20초 미만부터']]);
       h += sw('randomStart', '랜덤 스타트', '양측 대칭 랜덤 시작 포지션 (엔진이 공정성을 검증)');
       h += seg('rep', '동형 반복 규칙', [[0, '끄기'], [3, '3수 동형'], [5, '5수 동형']], '같은 포지션(양손 순서 무관)이 설정 횟수만큼 나오면 무승부');
+      h += sw('repBan', '동형 금기', '3수/5수 동형 규칙이 켜져 있을 때, 그 동형 횟수를 만들어내는 수 자체를 둘 수 없게 합니다 (금기 수만 남으면 그 쪽이 패배). 기본값 꺼짐');
       h += sw('drawWin', '무승부는 승리', '무승부 시 선공(백)의 승리로 판정합니다');
       h += sw('drawBalance', '밸런스 규칙', '시작 포지션이 선공에게 이미 유리하면 무승부를 후공의 승리로 판정');
     } else if (this.tab === 'custom') {
